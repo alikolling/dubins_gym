@@ -16,7 +16,7 @@ class DubinsEnv5D(gym.Env):
         self.high = np.array([4., 4., 2*np.pi, 2*np.pi, self.v_max])
         self.low = np.array([-4., -4., 0., 0., 0.0])
         self.observation_space = spaces.Box(low=self.low, high=self.high, dtype=np.float32)
-        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
         self.constraint = [0., 0., 0.5]  # [x, y, r] for avoidance circle
         self.viewer = None  # For rendering
 
@@ -24,11 +24,13 @@ class DubinsEnv5D(gym.Env):
            {"center": (0.5, 0.5), "radius": 0.3},
            {"box": (-1, 1, 2, 3)}
         ]
+        self.goal = np.array((2., 2.), dtype=np.float32)
+        self.goal_radius = 0.3
 
     def step(self, action):
         # Scale actions
-        omega = action * self.u_max  # Angular rate
-        accel = 0.1 * self.a_max  # Max acceleration
+        omega = action[1] * self.u_max  # Angular rate
+        accel = action[0] * self.a_max  # Max acceleration
 
         # Update position
         self.state[0] += self.dt * self.state[3] * self.state[4]  # cos(theta) * v
@@ -60,6 +62,19 @@ class DubinsEnv5D(gym.Env):
             (x - zone["center"][0])**2 + (y - zone["center"][1])**2 < zone["radius"]**2
             for zone in self.uncertainty_zones if "center" in zone
         )
+        
+        # compute distance to goal
+        dist_goal = np.linalg.norm(self.state[:2] - self.goal)
+        info['dist_to_goal'] = dist_goal
+
+        # add shaping reward: negative distance
+        rew += -dist_goal
+
+        # check goal attainment
+        if dist_goal < self.goal_radius:
+            terminated = True
+            rew += 10.0  # bonus for reaching goal
+        
         return self.state.astype(np.float32), rew, terminated, truncated, info
     
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
@@ -92,12 +107,15 @@ class DubinsEnv5D(gym.Env):
             self.ax.set_xlim(self.low[0] - 0.5, self.high[0] + 0.5)
             self.ax.set_ylim(self.low[1] - 0.5, self.high[1] + 0.5)
             self.ax.set_aspect('equal')
+            
             # Plot constraint (unsafe) region
             cx, cy, cr = self.constraint
             self.ax.add_patch(plt.Circle((cx, cy), cr, color='r', alpha=0.5, label='Unsafe'))
-            # Plot goal region
-            #gx, gy = self.goal
-            #self.ax.add_patch(plt.Circle((gx, gy), self.goal_radius, color='g', alpha=0.3, label='Goal'))
+            
+            #Plot goal region
+            gx, gy = self.goal
+            self.ax.add_patch(plt.Circle((gx, gy), self.goal_radius, color='g', alpha=0.3, label='Goal'))
+            
             # Plot OOD zones
             for zone in getattr(self, 'uncertainty_zones', []):
                 if 'center' in zone:
