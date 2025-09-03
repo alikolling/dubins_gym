@@ -1,0 +1,7 @@
+from gymnasium.envs.registration import register
+
+register(
+    id="dubins_gym/DubinsEnv-v0",
+    entry_point="dubins_gym.envs:DubinsEnv5D",
+    max_episode_steps=1000,
+)
