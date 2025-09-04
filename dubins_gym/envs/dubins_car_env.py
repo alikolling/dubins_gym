@@ -10,24 +10,30 @@ class DubinsEnv5D(gym.Env):
     def __init__(self):
         self.render_mode = None
         self.dt = 0.05
+        self.max_steps = 1000
+        self.current_step = 0
         self.u_max = 1.25  # Max angular rate
         self.a_max = 0.1  # Max acceleration
         self.v_max = 1.0  # Max velocity
-        self.high = np.array([4., 4., 2*np.pi, 2*np.pi, self.v_max])
-        self.low = np.array([-4., -4., 0., 0., 0.0])
+        self.high = np.array([4., 4., 1., 1., self.v_max, 1000])
+        self.low = np.array([-4., -4., -1., -1., -self.v_max*self.a_max, 0.0])
         self.observation_space = spaces.Box(low=self.low, high=self.high, dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
         self.constraint = [0., 0., 0.5]  # [x, y, r] for avoidance circle
         self.viewer = None  # For rendering
 
         self.uncertainty_zones = [
-           {"center": (0.5, 0.5), "radius": 0.3},
+           {"center": (-0.5, 0.5), "radius": 0.3},
            {"box": (-1, 1, 2, 3)}
         ]
         self.goal = np.array((2., 2.), dtype=np.float32)
         self.goal_radius = 0.3
 
+    def dist_goal_func(self, position):
+        return np.linalg.norm(position - self.goal)
+        
     def step(self, action):
+        self.current_step += 1
         # Scale actions
         omega = action[1] * self.u_max  # Angular rate
         accel = action[0] * self.a_max  # Max acceleration
@@ -44,60 +50,94 @@ class DubinsEnv5D(gym.Env):
 
         # Update velocity
         self.state[4] += self.dt * accel
-        self.state[4] = np.clip(self.state[4], 0, self.v_max)
+        self.state[4] = np.clip(self.state[4], -self.v_max*self.a_max, self.v_max)
 
         # Reward: Negative for violation (inside circle), 0 otherwise
         dist_sq = (self.state[0] - self.constraint[0])**2 + (self.state[1] - self.constraint[1])**2
         rew = -max(0, self.constraint[2]**2 - dist_sq)  # Penalty if inside r
 
         terminated = False
-        truncated = False
+        truncated = self.current_step >= self.max_steps
         if np.any(self.state[:2] > self.high[:2]) or np.any(self.state[:2] < self.low[:2]) or dist_sq < self.constraint[2]**2:
             terminated = True
-            rew -= 10.0  # Large penalty for violation
+            rew -= 100.0  # Large penalty for violation
         
         x, y = self.state[0], self.state[1]
         info = {"distance_sq": dist_sq}
         info["uncertainty_zone"] = any(
-            (x - zone["center"][0])**2 + (y - zone["center"][1])**2 < zone["radius"]**2
-            for zone in self.uncertainty_zones if "center" in zone
-        )
+            (
+                (x - zone["center"][0])**2 + (y - zone["center"][1])**2 < zone["radius"]**2
+                if "center" in zone
+                else zone["box"][0] < x < zone["box"][2] and zone["box"][1] < y < zone["box"][3]
+                if "box" in zone
+                else False
+            )
+            for zone in self.uncertainty_zones
+)
         
         # compute distance to goal
-        dist_goal = np.linalg.norm(self.state[:2] - self.goal)
+        dist_goal = self.dist_goal_func(self.state[:2])
+        self.state[5] = dist_goal
         info['dist_to_goal'] = dist_goal
 
         # add shaping reward: negative distance
-        rew += -dist_goal
+        rew += -0.1 * dist_goal
+        rew -= 0.01
 
         # check goal attainment
         if dist_goal < self.goal_radius:
-            terminated = True
+            #terminated = True
             rew += 10.0  # bonus for reaching goal
         
         return self.state.astype(np.float32), rew, terminated, truncated, info
     
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
-        super().reset(seed=seed)
-        if seed is not None:
-            self.np_random = np.random.RandomState(seed)
-        else:
-            self.np_random = np.random
+        super().reset(seed=seed)  # Sets self.np_random correctly as np.random.Generator
+        self.current_step = 0
         
-        if options:
-            initial_state = options["initial_state"] if "initial_state" in options else None
+        if options and "initial_state" in options:
+            self.state = np.array(options["initial_state"], dtype=np.float32)
         else:
-            initial_state = None
+            # Keep sampling until state is valid (outside constraint and uncertainty zones)
+            while True:
+                # Sample theta and velocity
+                theta = self.np_random.uniform(low=0, high=2 * np.pi)
+                v = 0.0
+                # Sample x, y within bounds
+                x, y = self.np_random.uniform(low=self.low[:2], high=self.high[:2])
+                
+                # Check constraint circle: (x - c_x)^2 + (y - c_y)^2 >= r^2
+                cx, cy, cr = self.constraint
+                dist_sq_constraint = (x - cx)**2 + (y - cy)**2
+                if dist_sq_constraint < cr**2:
+                    continue  # Inside constraint circle, resample
+                
+                # Check uncertainty zones
+                in_uncertainty_zone = False
+                for zone in self.uncertainty_zones:
+                    if "center" in zone:
+                        zx, zy = zone["center"]
+                        zr = zone["radius"]
+                        if (x - zx)**2 + (y - zy)**2 < zr**2:
+                            in_uncertainty_zone = True
+                            break
+                    elif "box" in zone:
+                        xmin, ymin, xmax, ymax = zone["box"]
+                        if xmin < x < xmax and ymin < y < ymax:
+                            in_uncertainty_zone = True
+                            break
+                
+                if in_uncertainty_zone:
+                    continue  # Inside uncertainty zone, resample
+                
+                # Valid state found
+                self.state = np.array(
+                    [x, y, np.sin(theta), np.cos(theta), v, 0.0], dtype=np.float32
+                )
+                break
         
-        if initial_state is None:
-            theta = self.np_random.uniform(low=0, high=2*np.pi)
-            self.state = self.np_random.uniform(low=self.low, high=self.high)
-            self.state[2] = np.sin(theta)
-            self.state[3] = np.cos(theta)
-        else:
-            self.state = initial_state
-        
-        self.state = self.state.astype(np.float32)
+        # Compute dist_to_goal for state[5]
+        self.state[5] = self.dist_goal_func(self.state[:2])
         return self.state, {}
     
     def render(self, mode='human', trajectory=None, traj_uncertainties=None):
@@ -129,7 +169,7 @@ class DubinsEnv5D(gym.Env):
             self.car_arrow = None
 
         # draw car
-        x, y, sin_theta, cos_theta, v = self.state
+        x, y, sin_theta, cos_theta, v, _ = self.state
         theta = np.arctan2(sin_theta, cos_theta)
         arrow_length = 0.1 * v / self.v_max + 0.05
         if self.car_arrow is not None:
