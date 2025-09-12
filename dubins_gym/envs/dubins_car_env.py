@@ -18,10 +18,10 @@ class DubinsEnv5D(gym.Env):
         self.obs_high = np.array([4., 4., 1., 1., self.v_max, 1000])
         self.obs_low = np.array([-4., -4., -1., -1., 0, 0.0])
         self.act_high = np.array([1., 1.])
-        self.act_low = np.array([0., 1.])
+        self.act_low = np.array([0., -1.])
         self.observation_space = spaces.Box(low=self.obs_low, high=self.obs_high, dtype=np.float32)
         self.action_space = spaces.Box(low=self.act_low, high=self.act_high, dtype=np.float32)
-        self.constraint = [0., 0., 0.5]  # [x, y, r] for avoidance circle
+        self.constraint = [{"center": (0., 0.), "radius": 0.5}]  # [x, y, r] for avoidance circle
         self.viewer = None  # For rendering
 
         self.uncertainty_zones = [
@@ -55,12 +55,14 @@ class DubinsEnv5D(gym.Env):
         self.state[4] = np.clip(self.state[4], 0 , self.v_max)
 
         # Reward: Negative for violation (inside circle), 0 otherwise
-        dist_sq = (self.state[0] - self.constraint[0])**2 + (self.state[1] - self.constraint[1])**2
-        rew = -max(0, self.constraint[2]**2 - dist_sq)  # Penalty if inside r
+        cx, cy = self.constraint[0]['center']
+        cr = self.constraint[0]['radius']
+        dist_sq = (self.state[0] - cx)**2 + (self.state[1] - cx)**2
+        rew = -max(0, cr**2 - dist_sq)  # Penalty if inside r
 
         terminated = False
         truncated = self.current_step >= self.max_steps
-        if np.any(self.state[:2] > self.obs_high[:2]) or np.any(self.state[:2] < self.obs_low[:2]) or dist_sq < self.constraint[2]**2:
+        if np.any(self.state[:2] > self.obs_high[:2]) or np.any(self.state[:2] < self.obs_low[:2]) or dist_sq < cr**2:
             terminated = True
             rew -= 100.0  # Large penalty for violation
         
@@ -109,7 +111,8 @@ class DubinsEnv5D(gym.Env):
                 x, y = self.np_random.uniform(low=self.obs_low[:2], high=self.obs_high[:2])
                 
                 # Check constraint circle: (x - c_x)^2 + (y - c_y)^2 >= r^2
-                cx, cy, cr = self.constraint
+                cx, cy = self.constraint[0]['center']
+                cr = self.constraint[0]['radius']
                 dist_sq_constraint = (x - cx)**2 + (y - cy)**2
                 if dist_sq_constraint < cr**2:
                     continue  # Inside constraint circle, resample
@@ -140,7 +143,7 @@ class DubinsEnv5D(gym.Env):
         
         # Compute dist_to_goal for state[5]
         self.state[5] = self.dist_goal_func(self.state[:2])
-        info = {"uncertainty_zones":self.uncertainty_zones, "goal":{"goal_pos":self.goal, "goal_radius":self.goal_radius}}
+        info = {"uncertainty_zones":self.uncertainty_zones, "goal":{"goal_pos":self.goal, "goal_radius":self.goal_radius}, "obstacle": self.constraint}
         return self.state, info
     
     def render(self, mode='human', trajectory=None, traj_uncertainties=None):
@@ -152,7 +155,8 @@ class DubinsEnv5D(gym.Env):
             self.ax.set_aspect('equal')
             
             # Plot constraint (unsafe) region
-            cx, cy, cr = self.constraint
+            cx, cy = self.constraint[0]['center']
+            cr = self.constraint[0]['radius']
             self.ax.add_patch(plt.Circle((cx, cy), cr, color='r', alpha=0.5, label='Unsafe'))
             
             #Plot goal region
