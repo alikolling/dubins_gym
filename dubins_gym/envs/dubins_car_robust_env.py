@@ -4,7 +4,7 @@ from gymnasium import spaces
 import matplotlib.pyplot as plt
 from typing import Optional
 
-class DubinsEnv5D(gym.Env):
+class DubinsRobustEnv5D(gym.Env):
 
     """Dubins car environment with 5D state: [x, y, sin(theta), cos(theta), v]."""
     
@@ -63,6 +63,7 @@ class DubinsEnv5D(gym.Env):
         cr = self.obstacle[0]['radius']
         dist_sq = (self.state[0] - cx)**2 + (self.state[1] - cy)**2
         rew, cost = 0.0, 0.0
+        inside_inside = False
         inside = False
         terminated = False
         truncated = self.current_step >= self.max_steps
@@ -88,9 +89,23 @@ class DubinsEnv5D(gym.Env):
             for zone in self.uncertainty_zones
         )
         
+        inside_inside = any(
+            (
+                (x - zone["center"][0])**2 + (y - zone["center"][1])**2 < (zone["radius"]-0.5)**2
+                if "center" in zone
+                else False
+            )
+            for zone in self.uncertainty_zones
+        )
+        
         if inside:
             cost = 1
+            obs += np.random.normal(loc=0.01, scale=0.1)
+            if np.random.uniform() > 0.8:
+                obs = np.random.normal(loc=2.0, scale=1.0, size=self.observation_space.shape) * np.random.randint(low=0, high=50, size=(1,))
             
+        if inside_inside:
+            obs = np.random.normal(loc=2.0, scale=1.0, size=self.observation_space.shape) * np.random.randint(low=0, high=50, size=(1,))
         # Compute distance to goal
         dist_goal = self.dist_goal_func(self.state[:2])
         info['dist_to_goal'] = dist_goal
