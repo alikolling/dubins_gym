@@ -27,7 +27,8 @@ class DubinsRobustEnv5D(gym.Env):
 
         self.uncertainty_zones = [
             {"center": (-2.5, -2.5), "radius": 1.5},
-            {"box": (-1, 1, 2, 3)}
+            {"box": (-1, 1, 2, 3)},
+            {"center": (2.5, -2.5), "radius": 1.5, "type": "high"}
         ]
         self.goal = np.array((2., 2.), dtype=np.float32)
         self.goal_radius = 0.3
@@ -63,8 +64,6 @@ class DubinsRobustEnv5D(gym.Env):
         cr = self.obstacle[0]['radius']
         dist_sq = (self.state[0] - cx)**2 + (self.state[1] - cy)**2
         rew, cost = 0.0, 0.0
-        inside_inside = False
-        inside = False
         terminated = False
         truncated = self.current_step >= self.max_steps
         if dist_sq < cr**2:
@@ -78,7 +77,11 @@ class DubinsRobustEnv5D(gym.Env):
         x, y = self.state[0], self.state[1]
         info = {"distance_sq": dist_sq}
 
-        inside = any(
+        # Separate normal and high uncertainty zones
+        normal_zones = [z for z in self.uncertainty_zones if z.get("type", "normal") == "normal"]
+        high_zones = [z for z in self.uncertainty_zones if z.get("type") == "high"]
+
+        inside_normal = any(
             (
                 (x - zone["center"][0])**2 + (y - zone["center"][1])**2 < zone["radius"]**2
                 if "center" in zone
@@ -86,7 +89,18 @@ class DubinsRobustEnv5D(gym.Env):
                 if "box" in zone
                 else False
             )
-            for zone in self.uncertainty_zones
+            for zone in normal_zones
+        )
+        
+        inside_high = any(
+            (
+                (x - zone["center"][0])**2 + (y - zone["center"][1])**2 < zone["radius"]**2
+                if "center" in zone
+                else zone["box"][0] < x < zone["box"][2] and zone["box"][1] < y < zone["box"][3]
+                if "box" in zone
+                else False
+            )
+            for zone in high_zones
         )
         
         inside_inside = any(
@@ -95,17 +109,25 @@ class DubinsRobustEnv5D(gym.Env):
                 if "center" in zone
                 else False
             )
-            for zone in self.uncertainty_zones
+            for zone in normal_zones
         )
         
-        if inside:
+        if inside_normal or inside_high:
             cost = 1
-            obs += np.random.normal(loc=0.01, scale=0.1)
+        
+        if inside_high or inside_inside:
+            # Realistic high noise: additive Gaussian with higher variance, plus occasional bias
+            obs += np.random.normal(loc=0.0, scale=0.5, size=self.observation_space.shape)
+            if np.random.uniform() < 0.3:  # 30% chance of bias (e.g., simulating sensor drift)
+                obs[:2] += np.random.normal(loc=0.5, scale=0.2)  # Bias in position
+            # Clip to observation bounds to keep it somewhat realistic
+            obs = np.clip(obs, self.obs_low, self.obs_high)
+        elif inside_normal:
+            obs += np.random.normal(loc=0.01, scale=0.1, size=self.observation_space.shape)
             if np.random.uniform() > 0.8:
-                obs = np.random.normal(loc=2.0, scale=1.0, size=self.observation_space.shape) * np.random.randint(low=0, high=50, size=(1,))
+                obs += np.random.normal(loc=0.0, scale=0.3, size=self.observation_space.shape)  # Moderate spike instead of extreme
+            obs = np.clip(obs, self.obs_low, self.obs_high)
             
-        if inside_inside:
-            obs = np.random.normal(loc=2.0, scale=1.0, size=self.observation_space.shape) * np.random.randint(low=0, high=50, size=(1,))
         # Compute distance to goal
         dist_goal = self.dist_goal_func(self.state[:2])
         info['dist_to_goal'] = dist_goal
@@ -182,7 +204,7 @@ class DubinsRobustEnv5D(gym.Env):
                     zr = zone.get('radius', 0.2)
                     self.ax.add_patch(plt.Circle((zx, zy), zr, color='orange', alpha=0.3, label='OOD zone'))
                 elif 'box' in zone:
-                    xmin, xmax, ymin, ymax = zone['box']
+                    xmin, ymin, xmax, ymax = zone['box']
                     self.ax.add_patch(plt.Rectangle((xmin, ymin), xmax-xmin, ymax-ymin, color='orange', alpha=0.3, label='OOD zone'))
 
             self.car_arrow = None
@@ -216,4 +238,3 @@ class DubinsRobustEnv5D(gym.Env):
             plt.close(self.fig)
             del self.fig
             del self.ax
-
