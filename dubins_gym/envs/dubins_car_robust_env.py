@@ -28,9 +28,9 @@ class DubinsRobustEnv5D(gym.Env):
         self.uncertainty_zones = [
             {"center": (-2.5, -2.5), "radius": 1.5},
             {"box": (-1, 1, 2, 3)},
-            {"center": (2.5, -2.5), "radius": 1.5, "type": "high"}
+            {"center": (1.5, -2.0), "radius": 0.75, "type": "high"}
         ]
-        self.goal = np.array((2., 2.), dtype=np.float32)
+        self.goal = np.array((3., -1.), dtype=np.float32)
         self.goal_radius = 0.3
         self.beta = 1.0  # Scaling factor from Safety-Gym
         self.reward_goal = 1.0  # Goal bonus per step from Safety-Gym
@@ -76,7 +76,7 @@ class DubinsRobustEnv5D(gym.Env):
         
         x, y = self.state[0], self.state[1]
         info = {"distance_sq": dist_sq}
-
+        info["state"] = self.state.copy()
         # Separate normal and high uncertainty zones
         normal_zones = [z for z in self.uncertainty_zones if z.get("type", "normal") == "normal"]
         high_zones = [z for z in self.uncertainty_zones if z.get("type") == "high"]
@@ -112,7 +112,7 @@ class DubinsRobustEnv5D(gym.Env):
             for zone in normal_zones
         )
         
-        if inside_normal or inside_high:
+        if inside_normal:
             cost = 1
         
         if inside_high or inside_inside:
@@ -179,7 +179,7 @@ class DubinsRobustEnv5D(gym.Env):
                 break
         
         self.last_dist = self.dist_goal_func(self.state[:2])  # Initialize for delta reward
-        info = {"uncertainty_zones": self.uncertainty_zones, "goal": {"goal_pos": self.goal, "goal_radius": self.goal_radius}, "obstacle": self.obstacle}
+        info = {"uncertainty_zones": self.uncertainty_zones, "goal": {"goal_pos": self.goal, "goal_radius": self.goal_radius}, "obstacle": self.obstacle, "state": self.state.copy()}
         obs = self.state.copy()
         return obs, info
     
@@ -214,7 +214,7 @@ class DubinsRobustEnv5D(gym.Env):
         arrow_length = 0.1 * abs(v) / self.v_max + 0.05
         if self.car_arrow is not None:
             self.car_arrow.remove()
-        self.car_arrow = self.ax.arrow(x, y, arrow_length*np.cos(theta), arrow_length*np.sin(theta), head_width=0.05, color='b')
+        self.car_arrow = self.ax.arrow(x, y, arrow_length*np.cos(theta), arrow_length*np.sin(theta), head_width=0.1, color='b')
 
         if trajectory is not None:
             traj = np.array(trajectory)

@@ -76,7 +76,7 @@ class DubinsEnv5D(gym.Env):
         
         x, y = self.state[0], self.state[1]
         info = {"distance_sq": dist_sq}
-
+        info["state"] = self.state
         inside = any(
             (
                 (x - zone["center"][0])**2 + (y - zone["center"][1])**2 < zone["radius"]**2
@@ -142,7 +142,7 @@ class DubinsEnv5D(gym.Env):
                 break
         
         self.last_dist = self.dist_goal_func(self.state[:2])  # Initialize for delta reward
-        info = {"uncertainty_zones": self.uncertainty_zones, "goal": {"goal_pos": self.goal, "goal_radius": self.goal_radius}, "obstacle": self.obstacle}
+        info = {"uncertainty_zones": self.uncertainty_zones, "goal": {"goal_pos": self.goal, "goal_radius": self.goal_radius}, "obstacle": self.obstacle, "state": self.state}
         obs = self.state.copy()
         return obs, info
     
