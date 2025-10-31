@@ -156,7 +156,7 @@ class DubinsEnv5D(gym.Env):
             
             cx, cy = self.obstacle[0]['center']
             cr = self.obstacle[0]['radius']
-            self.ax.add_patch(plt.Circle((cx, cy), cr, color='r', alpha=0.5, label='Unsafe'))
+            self.ax.add_patch(plt.Circle((cx, cy), cr, color='r', alpha=0.5, label='Obstacle'))
             
             gx, gy = self.goal
             self.ax.add_patch(plt.Circle((gx, gy), self.goal_radius, color='g', alpha=0.3, label='Goal'))
@@ -165,10 +165,10 @@ class DubinsEnv5D(gym.Env):
                 if 'center' in zone:
                     zx, zy = zone['center']
                     zr = zone.get('radius', 0.2)
-                    self.ax.add_patch(plt.Circle((zx, zy), zr, color='orange', alpha=0.3, label='OOD zone'))
+                    self.ax.add_patch(plt.Circle((zx, zy), zr, color='orange', alpha=0.3, label='Unsafe region'))
                 elif 'box' in zone:
                     xmin, xmax, ymin, ymax = zone['box']
-                    self.ax.add_patch(plt.Rectangle((xmin, ymin), xmax-xmin, ymax-ymin, color='orange', alpha=0.3, label='OOD zone'))
+                    self.ax.add_patch(plt.Rectangle((xmin, ymin), xmax-xmin, ymax-ymin, color='orange', alpha=0.3, label='Unsafe region'))
 
             self.car_arrow = None
 

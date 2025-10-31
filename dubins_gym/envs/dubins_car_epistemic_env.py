@@ -4,7 +4,7 @@ from gymnasium import spaces
 import matplotlib.pyplot as plt
 from typing import Optional
 
-class DubinsRobustEnv5D(gym.Env):
+class DubinsEpistemicEnv5D(gym.Env):
 
     """Dubins car environment with 5D state: [x, y, sin(theta), cos(theta), v]."""
     
@@ -104,22 +104,10 @@ class DubinsRobustEnv5D(gym.Env):
             for zone in high_zones
         )
         
+        
         if inside_normal:
             cost = 1
-        
-        if inside_high :
-            # Realistic high noise: additive Gaussian with higher variance, plus occasional bias
-            obs += np.random.normal(loc=0.0, scale=0.5, size=self.observation_space.shape)
-            if np.random.uniform() < 0.3:  # 30% chance of bias (e.g., simulating sensor drift)
-                obs[:2] += np.random.normal(loc=0.5, scale=0.2)  # Bias in position
-            # Clip to observation bounds to keep it somewhat realistic
-            obs = np.clip(obs, self.obs_low, self.obs_high)
-        elif inside_normal:
-            obs += np.random.normal(loc=0.01, scale=0.1, size=self.observation_space.shape)
-            if np.random.uniform() > 0.8:
-                obs += np.random.normal(loc=0.0, scale=0.3, size=self.observation_space.shape)  # Moderate spike instead of extreme
-            obs = np.clip(obs, self.obs_low, self.obs_high)
-            
+        info['epistemic'] = inside_high
         # Compute distance to goal
         dist_goal = self.dist_goal_func(self.state[:2])
         info['dist_to_goal'] = dist_goal
@@ -195,7 +183,7 @@ class DubinsRobustEnv5D(gym.Env):
                     if 'type' in zone:
                         zx, zy = zone['center']
                         zr = zone.get('radius', 0.2)
-                        self.ax.add_patch(plt.Circle((zx, zy), zr, color='magenta', alpha=0.3, label='High noise region'))
+                        self.ax.add_patch(plt.Circle((zx, zy), zr, color='magenta', alpha=0.3, label='High uncertainty region'))
                     else:
                         zx, zy = zone['center']
                         zr = zone.get('radius', 0.2)
@@ -203,6 +191,7 @@ class DubinsRobustEnv5D(gym.Env):
                 elif 'box' in zone:
                     xmin, xmax, ymin, ymax = zone['box']
                     self.ax.add_patch(plt.Rectangle((xmin, ymin), xmax-xmin, ymax-ymin, color='orange', alpha=0.3, label='Unsafe region'))
+
             self.car_arrow = None
 
         x, y, sin_theta, cos_theta, v = self.state

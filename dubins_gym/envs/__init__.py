@@ -1,2 +1,3 @@
 from dubins_gym.envs.dubins_car_env import DubinsEnv5D
 from dubins_gym.envs.dubins_car_robust_env import DubinsRobustEnv5D
+from dubins_gym.envs.dubins_car_epistemic_env import DubinsEpistemicEnv5D
