@@ -7,3 +7,5 @@ dubins_gym.egg-info/dependency_links.txt
 dubins_gym.egg-info/top_level.txt
 dubins_gym/envs/__init__.py
 dubins_gym/envs/dubins_car_env.py
+dubins_gym/envs/dubins_car_epistemic_env.py
+dubins_gym/envs/dubins_car_robust_env.py

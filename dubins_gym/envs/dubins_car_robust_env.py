@@ -25,10 +25,16 @@ class DubinsRobustEnv5D(gym.Env):
         self.obstacle = [{"center": (0., 0.), "radius": 0.5}]  # Avoidance circle
         self.viewer = None  # For rendering
 
+        # Cost fires on any untyped zone, so a high zone overlapping one would make
+        # corrupted observations imply `cost=1` and leave "the agent avoided the
+        # region" unattributable between uncertainty and cost. The high zones are
+        # therefore disjoint from the cost zones, which `test_zones.py` asserts.
+        # Geometry is kept identical to the epistemic variant so the two stay a
+        # controlled pair differing only in noise versus label.
         self.uncertainty_zones = [
             {"center": (-2.5, -2.5), "radius": 1.5},
-            {"center": (-2.5, -2.5), "radius": 1.0, "type": "high"},
             {"box": (-1, 1, 2, 3)},
+            {"center": (-2.5, 0.5), "radius": 1.0, "type": "high"},
             {"center": (1.5, -2.0), "radius": 0.75, "type": "high"}
         ]
         self.goal = np.array((3., -1.), dtype=np.float32)
