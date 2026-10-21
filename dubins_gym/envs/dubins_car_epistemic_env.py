@@ -4,11 +4,95 @@ from gymnasium import spaces
 import matplotlib.pyplot as plt
 from typing import Optional
 
+# Cost zones are untyped. A high zone's optional `drift` is "inward" (toward the zone's centre)
+# or a fixed unit vector (dx, dy); without it the car slides to the left of its heading.
+# `obstacle: r` puts an obstacle of radius r at the zone's centre, `obstacles: ((centre, r), ...)`
+# puts them anywhere.
+LAYOUTS = {
+    # Interior high zones away from every fixture: entering one changes the dynamics and
+    # nothing else (MUARL PLAN.md, T1).
+    "default": [
+        {"center": (-2.5, -2.5), "radius": 1.5},
+        {"box": (-1, 1, 2, 3)},
+        {"center": (-2.5, 0.5), "radius": 1.0, "type": "high"},
+        {"center": (1.5, -2.0), "radius": 0.75, "type": "high"},
+    ],
+    # The same zones, each hiding an obstacle its drift pulls the car into. With the zones
+    # withheld, a model never sees the obstacle or the pull, so only epistemic uncertainty can
+    # keep a planner out (MUARL PLAN.md, P5).
+    "hazard": [
+        {"center": (-2.5, -2.5), "radius": 1.5},
+        {"box": (-1, 1, 2, 3)},
+        {"center": (-2.5, 0.5), "radius": 1.0, "type": "high", "drift": "inward", "obstacle": 0.3},
+        {"center": (1.5, -2.0), "radius": 0.75, "type": "high", "drift": "inward", "obstacle": 0.3},
+    ],
+    # The hazard zones as ice, plus two mud patches the car sees in training too
+    # (`DubinsTerrainEnv`). `terrain_train` is the same arena before the ice.
+    "terrain": [
+        {"center": (-2.5, -2.5), "radius": 1.5},
+        {"box": (-1, 1, 2, 3)},
+        {"center": (-2.5, 0.5), "radius": 1.0, "type": "high", "drift": "inward", "obstacle": 0.3},
+        {"center": (1.5, -2.0), "radius": 0.75, "type": "high", "drift": "inward", "obstacle": 0.3},
+        {"center": (3.0, 2.0), "radius": 0.6, "type": "mud"},
+        {"center": (-2.0, 2.8), "radius": 0.6, "type": "mud"},
+    ],
+    "terrain_train": [
+        {"center": (-2.5, -2.5), "radius": 1.5},
+        {"box": (-1, 1, 2, 3)},
+        {"center": (3.0, 2.0), "radius": 0.6, "type": "mud"},
+        {"center": (-2.0, 2.8), "radius": 0.6, "type": "mud"},
+    ],
+    # A data frontier (MUARL PLAN.md, P7): the whole arena north of y = 1.5 is one high zone, so
+    # withheld data lies on one side of it only and a model has to extrapolate to imagine the car
+    # crossing. Interior zones have data all round and get interpolated. The strip pulls the car
+    # north and hides three obstacles; the cost box moves south, out of it.
+    "frontier": [
+        {"center": (-2.5, -2.5), "radius": 1.5},
+        {"box": (0.5, -3.0, 2.0, -1.5)},
+        {"box": (-4.0, 1.5, 4.0, 4.0), "type": "high", "drift": (0.0, 1.0),
+         "obstacles": (((-2.0, 2.2), 0.3), ((0.8, 2.1), 0.3), ((2.8, 2.3), 0.3))},
+    ],
+    # The frontier for exploration (`DubinsFrontierExploreEnv`, MUARL PLAN.md, P8). The strip's
+    # hazards are cost zones at the old obstacles' centres, so entering one costs instead of
+    # crashing; they overlap the high zone on purpose and are hidden only by the withholding.
+    # Noise zones push the car at random and stay in the data.
+    "frontier_explore": [
+        {"center": (-2.5, -2.5), "radius": 1.5},
+        {"box": (0.5, -3.0, 2.0, -1.5)},
+        {"box": (-4.0, 1.5, 4.0, 4.0), "type": "high", "drift": (0.0, 1.0)},
+        {"center": (-2.0, 2.2), "radius": 0.5},
+        {"center": (0.8, 2.1), "radius": 0.5},
+        {"center": (2.8, 2.3), "radius": 0.5},
+        {"center": (-2.5, 0.2), "radius": 0.8, "type": "noise"},
+        {"center": (3.0, -2.0), "radius": 0.6, "type": "noise"},
+    ],
+}
+GOALS = {
+    "frontier": (2.5, 0.8),  # 0.7 m below the frontier, so plans brush it
+    "frontier_explore": (-0.6, 3.0),  # inside the strip: reaching it needs strip data
+}
+
+
+def hidden_obstacles(zone):
+    """`(centre, radius)` of each obstacle a high zone hides."""
+    if "obstacle" in zone:
+        return ((zone["center"], zone["obstacle"]),)
+    return tuple(zone.get("obstacles", ()))
+
+
 class DubinsEpistemicEnv5D(gym.Env):
 
     """Dubins car environment with 5D state: [x, y, sin(theta), cos(theta), v]."""
     
-    def __init__(self):
+    def __init__(self, zone_drift=0.0, layout="default"):
+        """`zone_drift` (m/s): inside a high zone the car also slides at this speed, along the
+        zone's `drift` direction or else to the left of its heading. Deterministic, so
+        withholding those transitions hides physics the model has never seen. At 0 a high zone
+        moves the car exactly as anywhere else, so withholding it leaves a gap a model fills by
+        interpolation and there is nothing for an epistemic estimator to detect (MUARL
+        PLAN.md, T1). `layout` picks the zones from `LAYOUTS`."""
+        self.zone_drift = float(zone_drift)
+        self.layout = layout
         self.render_mode = None
         self.dt = 0.05
         self.max_steps = 200  # Aligned with shorter horizon for faster TD-MPC2 training
@@ -22,20 +106,18 @@ class DubinsEpistemicEnv5D(gym.Env):
         self.act_low = np.array([-1., -1.])
         self.observation_space = spaces.Box(low=self.obs_low, high=self.obs_high, dtype=np.float32)
         self.action_space = spaces.Box(low=self.act_low, high=self.act_high, dtype=np.float32)
-        self.obstacle = [{"center": (0., 0.), "radius": 0.5}]  # Avoidance circle
         self.viewer = None  # For rendering
 
         # Cost fires on any untyped zone, so a high zone overlapping one would make
         # `inside_high` imply `cost=1` and leave "the agent avoided the region"
         # unattributable between uncertainty and cost. The high zones are therefore
         # disjoint from the cost zones, which `test_zones.py` asserts.
-        self.uncertainty_zones = [
-            {"center": (-2.5, -2.5), "radius": 1.5},
-            {"box": (-1, 1, 2, 3)},
-            {"center": (-2.5, 0.5), "radius": 1.0, "type": "high"},
-            {"center": (1.5, -2.0), "radius": 0.75, "type": "high"}
-        ]
-        self.goal = np.array((3., -1.), dtype=np.float32)
+        self.uncertainty_zones = [dict(z) for z in LAYOUTS[layout]]
+        # obstacle[0] is the visible one every layout shares; the rest hide inside high zones.
+        self.obstacle = [{"center": (0., 0.), "radius": 0.5}] + [
+            {"center": c, "radius": r, "hidden": True}
+            for z in self.uncertainty_zones for c, r in hidden_obstacles(z)]
+        self.goal = np.array(GOALS.get(layout, (3., -1.)), dtype=np.float32)
         self.goal_radius = 0.3
         self.beta = 1.0  # Scaling factor from Safety-Gym
         self.reward_goal = 1.0  # Goal bonus per step from Safety-Gym
@@ -50,9 +132,24 @@ class DubinsEpistemicEnv5D(gym.Env):
         omega = action[1] * self.u_max
         accel = action[0] * self.a_max
 
+        # Zone membership before the move: the dynamics depend on where the car is.
+        zone = self._high_zone_at(self.state[0], self.state[1])
+        speed = self._speed_factor(self.state[0], self.state[1])
+        if zone is not None and self.zone_drift:
+            if zone.get("drift") == "inward":
+                dx, dy = zone["center"][0] - self.state[0], zone["center"][1] - self.state[1]
+                norm = max(np.hypot(dx, dy), 1e-6)
+                dx, dy = dx / norm, dy / norm
+            elif "drift" in zone:
+                dx, dy = zone["drift"]
+            else:  # left of the heading
+                dx, dy = -self.state[2], self.state[3]
+            self.state[0] += self.dt * self.zone_drift * dx
+            self.state[1] += self.dt * self.zone_drift * dy
+
         # Update position
-        self.state[0] += self.dt * self.state[3] * self.state[4]  # cos(theta) * v
-        self.state[1] += self.dt * self.state[2] * self.state[4]  # sin(theta) * v
+        self.state[0] += self.dt * self.state[3] * self.state[4] * speed  # cos(theta) * v
+        self.state[1] += self.dt * self.state[2] * self.state[4] * speed  # sin(theta) * v
         
         # Update heading
         theta = np.arctan2(self.state[2], self.state[3])
@@ -66,12 +163,12 @@ class DubinsEpistemicEnv5D(gym.Env):
         obs = self.state.copy()
         # Reward: Negative for violation
         cx, cy = self.obstacle[0]['center']
-        cr = self.obstacle[0]['radius']
         dist_sq = (self.state[0] - cx)**2 + (self.state[1] - cy)**2
         rew, cost = 0.0, 0.0
         terminated = False
         truncated = self.current_step >= self.max_steps
-        if dist_sq < cr**2:
+        if any((self.state[0] - o["center"][0])**2 + (self.state[1] - o["center"][1])**2 < o["radius"]**2
+               for o in self.obstacle):
             terminated = True
             rew = -10.0  # Large penalty on termination (keep for now, but tunable)
         
@@ -111,7 +208,8 @@ class DubinsEpistemicEnv5D(gym.Env):
         
         if inside_normal:
             cost = 1
-        info['epistemic'] = inside_high
+        # A step touches a high zone if it starts or ends in one: one that starts inside drifted.
+        info['epistemic'] = inside_high or zone is not None
         # Compute distance to goal
         dist_goal = self.dist_goal_func(self.state[:2])
         info['dist_to_goal'] = dist_goal
@@ -125,6 +223,22 @@ class DubinsEpistemicEnv5D(gym.Env):
         
         return obs.astype(np.float32), rew, terminated, truncated, info
 
+    def _speed_factor(self, x, y):
+        """Share of the commanded speed the ground at `(x, y)` lets through; 1 here."""
+        return 1.0
+
+    def _high_zone_at(self, x, y):
+        """The high zone containing `(x, y)`, or None."""
+        for zone in self.uncertainty_zones:
+            if zone.get("type") != "high":
+                continue
+            if "center" in zone:
+                if (x - zone["center"][0]) ** 2 + (y - zone["center"][1]) ** 2 < zone["radius"] ** 2:
+                    return zone
+            elif zone["box"][0] < x < zone["box"][2] and zone["box"][1] < y < zone["box"][3]:
+                return zone
+        return None
+
     def _is_in_uncertainty_zone(self, x, y):
         for zone in self.uncertainty_zones:
             if 'center' in zone:
@@ -133,7 +247,7 @@ class DubinsEpistemicEnv5D(gym.Env):
                     return True
             elif 'box' in zone:
                 xmin, ymin, xmax, ymax = zone['box']
-                if xmin < x+0.1 < xmax and ymin < y+0.1 < ymax:
+                if xmin - 0.1 < x < xmax + 0.1 and ymin - 0.1 < y < ymax + 0.1:
                     return True
         return False
     
@@ -149,9 +263,8 @@ class DubinsEpistemicEnv5D(gym.Env):
                 v = self.np_random.uniform(low=-self.v_max, high=self.v_max)  # Sample velocity
                 x, y = self.np_random.uniform(low=self.obs_low[:2], high=self.obs_high[:2])
                 
-                cx, cy = self.obstacle[0]['center']
-                cr = self.obstacle[0]['radius']
-                if (x - cx)**2 + (y - cy)**2 < (cr+0.1)**2:
+                if any((x - o["center"][0])**2 + (y - o["center"][1])**2 < (o["radius"] + 0.1)**2
+                       for o in self.obstacle):
                     continue
                 
                 if self._is_in_uncertainty_zone(x, y):

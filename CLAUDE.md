@@ -52,6 +52,15 @@ All three share the dynamics, the reward, the obstacle, and the 200-step limit. 
 | `DubinsEnv-v0` | `(2, 2)` | 1 circle, 1 box, no types | n/a, every zone just costs |
 | `DubinsRobustEnv-v0` | `(3, -1)` | 2 typed circles, 1 box | **Corrupts the observation** |
 | `DubinsEpistemicEnv-v0` | `(3, -1)` | 2 typed circles, 1 box | **Only sets a flag** |
+| `DubinsTerrainEnv-v0`, `DubinsTerrainIceEnv-v0` | `(3, -1)` | as epistemic, plus 2 `mud` circles; the high circles only in the `Ice` env | **Ice**: the hazard drift and hidden obstacle, and a 0.2 friction reading |
+| `DubinsFrontierEnv-v0` | `(2.5, 0.8)` | cost circle, cost box moved to `(0.5, -3, 2, -1.5)`, one high box: everything north of y = 1.5 | Drifts the car north at 0.5 m/s and hides three obstacles (r 0.3) |
+
+`DubinsFrontierEnv` (layout `frontier`) is a data frontier: with the strip withheld, the data lies
+on one side of it only, so a model has to extrapolate to imagine the car crossing, where interior
+zones get interpolated (MUARL PLAN.md, P7). A layout can set its goal in `GOALS`, a fixed drift
+vector, and several hidden obstacles (`obstacles`).
+
+`DubinsTerrainEnv` (`envs/dubins_car_terrain_env.py`) appends five friction readings ahead of the car to the 5-d state (normal 1.0, mud 0.7, ice 0.2). Mud slows the car to 70% through the base env's `_speed_factor` hook (1.0 everywhere else). MUARL trains on the env without ice and evaluates on the one with it, so the ice reading is an input the model never saw.
 
 The robust and epistemic envs have the exact same geometry. The contrast between them is the experiment:
 

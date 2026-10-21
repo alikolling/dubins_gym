@@ -1,3 +1,5 @@
 from dubins_gym.envs.dubins_car_env import DubinsEnv5D
 from dubins_gym.envs.dubins_car_robust_env import DubinsRobustEnv5D
 from dubins_gym.envs.dubins_car_epistemic_env import DubinsEpistemicEnv5D
+from dubins_gym.envs.dubins_car_terrain_env import DubinsTerrainEnv
+from dubins_gym.envs.dubins_car_frontier_explore_env import DubinsFrontierExploreEnv
